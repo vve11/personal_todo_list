@@ -1,0 +1,13 @@
+__pycache__/
+.venv/
+.venv
+venv/
+env/
+todos.db
+node_modules/
+client/node_modules/
+client/dist/
+.DS_Store
+*.pyc
+.env
+.env.local
