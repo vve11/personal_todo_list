@@ -105,6 +105,95 @@ button {
   filter: none;
 }
 
+.btn-ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.85rem;
+  font-size: 0.9rem;
+}
+
+.btn-ghost:hover {
+  color: var(--text);
+  border-color: var(--accent-dim);
+}
+
+.profile-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.25rem;
+}
+
+.profile-view {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.profile-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.profile-name {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.profile-email {
+  font-size: 0.9rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.profile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.profile-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.profile-field input {
+  background: #10141f;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 0.55rem 0.75rem;
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.profile-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(108, 156, 255, 0.2);
+}
+
+.profile-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
 .error-banner {
   background: rgba(240, 113, 120, 0.12);
   border: 1px solid rgba(240, 113, 120, 0.35);

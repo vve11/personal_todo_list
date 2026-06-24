@@ -16,6 +16,26 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
 
+class User(db.Model):
+    __tablename__ = "users"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False, default="You")
+    email = db.Column(db.String(255), nullable=False, default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "email": self.email,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+
 class Task(db.Model):
     __tablename__ = "tasks"
     id = db.Column(db.Integer, primary_key=True)
@@ -36,7 +56,7 @@ class Task(db.Model):
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
         }
-
+    
 
 def _next_sort_order():
     m = db.session.query(func.max(Task.sort_order)).scalar()
@@ -61,6 +81,42 @@ def _get_task_or_404(tid: int):
     return t, None
 
 
+_PROFILE_ID = 1
+
+
+def _get_profile():
+    u = db.session.get(User, _PROFILE_ID)
+    if u is None:
+        u = User(id=_PROFILE_ID, name="You", email="")
+        db.session.add(u)
+        db.session.commit()
+    return u
+
+
+@app.get("/api/user")
+def get_user():
+    return jsonify(_get_profile().to_dict())
+
+
+@app.patch("/api/user")
+def update_user():
+    u = _get_profile()
+    data = request.get_json(silent=True) or {}
+    if "name" in data:
+        s = (data.get("name") or "").strip()
+        if not s:
+            return jsonify({"error": "name must not be empty"}), 400
+        u.name = s[:120]
+    if "email" in data:
+        email = (data.get("email") or "").strip()
+        if email and "@" not in email:
+            return jsonify({"error": "email is invalid"}), 400
+        u.email = email[:255]
+    u.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(u.to_dict())
+
+
 @app.get("/api/tasks")
 def list_tasks():
     items = Task.query.order_by(Task.sort_order, Task.id).all()
@@ -81,7 +137,6 @@ def create_task():
     db.session.add(task)
     db.session.commit()
     return jsonify(task.to_dict()), 201
-
 
 @app.patch("/api/tasks/<int:task_id>")
 def update_task(task_id: int):
@@ -199,5 +254,5 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5050"))
     # 0.0.0.0: listen on all interfaces; in the browser use http://127.0.0.1:<port>/
     host = os.environ.get("HOST", "0.0.0.0")
-    print(f"Todo API: open http://127.0.0.1:{port}/  (API: /api/tasks)")
+    print(f"Todo API: open http://127.0.0.1:{port}/  (API: /api/tasks, /api/user)")
     app.run(debug=True, host=host, port=port, use_reloader=False, threaded=True)

@@ -14,6 +14,25 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+async function apiGetUser() {
+  const r = await fetch("/api/user");
+  if (!r.ok) throw new Error(await r.text() || "Failed to load profile");
+  return r.json();
+}
+
+async function apiUpdateUser(patch) {
+  const r = await fetch("/api/user", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.error || "Could not save profile");
+  }
+  return r.json();
+}
+
 async function apiList() {
   const r = await fetch("/api/tasks");
   if (!r.ok) throw new Error(await r.text() || "Failed to load tasks");
@@ -173,6 +192,7 @@ function SortableTask({
 }
 
 export default function App() {
+  const [user, setUser] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -180,6 +200,9 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState("");
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [profileDraft, setProfileDraft] = useState({ name: "", email: "" });
+  const [savingProfile, setSavingProfile] = useState(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -187,12 +210,21 @@ export default function App() {
     setTasks(data);
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    const data = await apiGetUser();
+    setUser(data);
+    return data;
+  }, []);
+
   useEffect(() => {
     let live = true;
     (async () => {
       try {
         setLoading(true);
-        await refresh();
+        const [profile] = await Promise.all([refreshUser(), refresh()]);
+        if (live) {
+          setProfileDraft({ name: profile.name, email: profile.email || "" });
+        }
       } catch (e) {
         if (live) setError(e instanceof Error ? e.message : "Load error");
       } finally {
@@ -202,11 +234,44 @@ export default function App() {
     return () => {
       live = false;
     };
-  }, [refresh]);
+  }, [refresh, refreshUser]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
   );
+
+  const onStartProfileEdit = () => {
+    if (!user) return;
+    setProfileDraft({ name: user.name, email: user.email || "" });
+    setEditingProfile(true);
+  };
+
+  const onCancelProfileEdit = () => {
+    if (user) setProfileDraft({ name: user.name, email: user.email || "" });
+    setEditingProfile(false);
+  };
+
+  const onSaveProfile = async (e) => {
+    e.preventDefault();
+    const name = profileDraft.name.trim();
+    const email = profileDraft.email.trim();
+    if (!name) {
+      setError("Name cannot be empty");
+      return;
+    }
+    setSavingProfile(true);
+    setError(null);
+    try {
+      const updated = await apiUpdateUser({ name, email });
+      setUser(updated);
+      setProfileDraft({ name: updated.name, email: updated.email || "" });
+      setEditingProfile(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save profile");
+    } finally {
+      setSavingProfile(false);
+    }
+  };
 
   const onAdd = async (e) => {
     e.preventDefault();
@@ -309,9 +374,74 @@ export default function App() {
   return (
     <div className="app-wrap">
       <header>
-        <h1>Your tasks</h1>
+        <h1>{user ? `${user.name}'s tasks` : "Your tasks"}</h1>
         <p className="sub">Add items, mark done, edit text, and drag to put them in order.</p>
       </header>
+      {user && (
+        <section className="profile-panel" aria-label="User profile">
+          {editingProfile ? (
+            <form className="profile-form" onSubmit={onSaveProfile}>
+              <label className="profile-field">
+                <span className="profile-label">Name</span>
+                <input
+                  type="text"
+                  value={profileDraft.name}
+                  onChange={(e) =>
+                    setProfileDraft((p) => ({ ...p, name: e.target.value }))
+                  }
+                  maxLength={120}
+                  autoComplete="name"
+                  required
+                />
+              </label>
+              <label className="profile-field">
+                <span className="profile-label">Email</span>
+                <input
+                  type="email"
+                  value={profileDraft.email}
+                  onChange={(e) =>
+                    setProfileDraft((p) => ({ ...p, email: e.target.value }))
+                  }
+                  maxLength={255}
+                  placeholder="optional"
+                  autoComplete="email"
+                />
+              </label>
+              <div className="profile-actions">
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={onCancelProfileEdit}
+                  disabled={savingProfile}
+                >
+                  Cancel
+                </button>
+                <button className="btn-primary" type="submit" disabled={savingProfile}>
+                  {savingProfile ? "Saving…" : "Save profile"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="profile-view">
+              <div className="profile-meta">
+                <span className="profile-name">{user.name}</span>
+                {user.email ? (
+                  <span className="profile-email">{user.email}</span>
+                ) : (
+                  <span className="profile-email muted">No email set</span>
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={onStartProfileEdit}
+              >
+                Edit profile
+              </button>
+            </div>
+          )}
+        </section>
+      )}
       {error && (
         <div className="error-banner" role="alert">
           {error}
