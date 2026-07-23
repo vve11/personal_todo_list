@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   DndContext,
   closestCenter,
@@ -39,11 +39,13 @@ async function apiList() {
   return r.json();
 }
 
-async function apiCreate(title) {
+async function apiCreate(title, due_at = null) {
+  const body = { title, completed: false };
+  if (due_at) body.due_at = due_at;
   const r = await fetch("/api/tasks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, completed: false }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) {
     const d = await r.json().catch(() => ({}));
@@ -83,12 +85,60 @@ async function apiReorder(taskIds) {
   return r.json();
 }
 
+async function apiGetDueNotifications() {
+  const r = await fetch("/api/notifications/due");
+  if (!r.ok) throw new Error("Failed to load notifications");
+  return r.json();
+}
+
+async function apiSendNotifications() {
+  const r = await fetch("/api/notifications/send", { method: "POST" });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || "Could not send notifications");
+  return d;
+}
+
+function toDatetimeLocalValue(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function dueAtFromLocalInput(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function formatDueLabel(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function urgencyClass(urgency) {
+  if (urgency === "overdue") return "due-overdue";
+  if (urgency === "due_soon") return "due-soon";
+  return "";
+}
+
 function SortableTask({
   task,
   onToggle,
   onSaveTitle,
   onStartEdit,
   onDelete,
+  onDueChange,
+  urgency,
   editing,
   setEditingId,
   draft,
@@ -166,6 +216,28 @@ function SortableTask({
             {task.title}
           </span>
         )}
+        {!task.completed && (
+          <label className="task-due-field">
+            <span className="sr-only">Deadline</span>
+            <input
+              type="datetime-local"
+              className={`task-due-input ${urgencyClass(urgency)}`}
+              value={toDatetimeLocalValue(task.due_at)}
+              onChange={(e) => onDueChange(task, e.target.value)}
+              title="Set deadline"
+            />
+            {task.due_at && (
+              <span className={`task-due-label ${urgencyClass(urgency)}`}>
+                {urgency === "overdue"
+                  ? "Overdue"
+                  : urgency === "due_soon"
+                    ? "Due soon"
+                    : "Due"}{" "}
+                · {formatDueLabel(task.due_at)}
+              </span>
+            )}
+          </label>
+        )}
       </div>
       <div className="row-actions">
         <button
@@ -197,12 +269,22 @@ export default function App() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [newTitle, setNewTitle] = useState("");
+  const [newDue, setNewDue] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState("");
   const [editingProfile, setEditingProfile] = useState(false);
-  const [profileDraft, setProfileDraft] = useState({ name: "", email: "" });
+  const [profileDraft, setProfileDraft] = useState({
+    name: "",
+    email: "",
+    notifications_enabled: true,
+  });
   const [savingProfile, setSavingProfile] = useState(false);
+  const [dueAlerts, setDueAlerts] = useState([]);
+  const [notifyBeforeHours, setNotifyBeforeHours] = useState(24);
+  const [sendingNotify, setSendingNotify] = useState(false);
+  const [notifyInfo, setNotifyInfo] = useState(null);
+  const shownBrowserAlerts = useRef(new Set());
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -216,6 +298,27 @@ export default function App() {
     return data;
   }, []);
 
+  const refreshDueAlerts = useCallback(async () => {
+    const data = await apiGetDueNotifications();
+    setDueAlerts(data.items || []);
+    setNotifyBeforeHours(data.notify_before_hours || 24);
+    return data;
+  }, []);
+
+  const showBrowserNotifications = useCallback((items) => {
+    if (!items.length || typeof Notification === "undefined") return;
+    if (Notification.permission !== "granted") return;
+    for (const item of items) {
+      const tag = `${item.task_id}-${item.urgency}`;
+      if (shownBrowserAlerts.current.has(tag)) continue;
+      shownBrowserAlerts.current.add(tag);
+      new Notification(item.urgency === "overdue" ? "Task overdue" : "Task due soon", {
+        body: item.message,
+        tag: `todo-${item.task_id}`,
+      });
+    }
+  }, []);
+
   useEffect(() => {
     let live = true;
     (async () => {
@@ -223,7 +326,15 @@ export default function App() {
         setLoading(true);
         const [profile] = await Promise.all([refreshUser(), refresh()]);
         if (live) {
-          setProfileDraft({ name: profile.name, email: profile.email || "" });
+          setProfileDraft({
+            name: profile.name,
+            email: profile.email || "",
+            notifications_enabled: profile.notifications_enabled !== false,
+          });
+        }
+        if (live && profile.notifications_enabled !== false) {
+          const dueData = await refreshDueAlerts();
+          if (live) showBrowserNotifications(dueData.items || []);
         }
       } catch (e) {
         if (live) setError(e instanceof Error ? e.message : "Load error");
@@ -234,7 +345,40 @@ export default function App() {
     return () => {
       live = false;
     };
-  }, [refresh, refreshUser]);
+  }, [refresh, refreshUser, refreshDueAlerts, showBrowserNotifications]);
+
+  useEffect(() => {
+    if (!user?.notifications_enabled) {
+      setDueAlerts([]);
+      return undefined;
+    }
+    let live = true;
+    const tick = async () => {
+      try {
+        const data = await refreshDueAlerts();
+        if (live) showBrowserNotifications(data.items || []);
+      } catch {
+        /* ignore polling errors */
+      }
+    };
+    const id = window.setInterval(tick, 60_000);
+    return () => {
+      live = false;
+      window.clearInterval(id);
+    };
+  }, [user?.notifications_enabled, refreshDueAlerts, showBrowserNotifications]);
+
+  const requestNotificationPermission = async () => {
+    if (typeof Notification === "undefined") {
+      setError("Browser notifications are not supported here");
+      return;
+    }
+    if (Notification.permission === "granted") return;
+    const result = await Notification.requestPermission();
+    if (result !== "granted") {
+      setError("Browser notification permission was denied");
+    }
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
@@ -242,12 +386,18 @@ export default function App() {
 
   const onStartProfileEdit = () => {
     if (!user) return;
-    setProfileDraft({ name: user.name, email: user.email || "" });
+    setProfileDraft({ name: user.name, email: user.email || "", notifications_enabled: user.notifications_enabled !== false });
     setEditingProfile(true);
   };
 
   const onCancelProfileEdit = () => {
-    if (user) setProfileDraft({ name: user.name, email: user.email || "" });
+    if (user) {
+      setProfileDraft({
+        name: user.name,
+        email: user.email || "",
+        notifications_enabled: user.notifications_enabled !== false,
+      });
+    }
     setEditingProfile(false);
   };
 
@@ -262,10 +412,22 @@ export default function App() {
     setSavingProfile(true);
     setError(null);
     try {
-      const updated = await apiUpdateUser({ name, email });
+      const updated = await apiUpdateUser({
+        name,
+        email,
+        notifications_enabled: profileDraft.notifications_enabled,
+      });
       setUser(updated);
-      setProfileDraft({ name: updated.name, email: updated.email || "" });
+      setProfileDraft({
+        name: updated.name,
+        email: updated.email || "",
+        notifications_enabled: updated.notifications_enabled !== false,
+      });
       setEditingProfile(false);
+      if (updated.notifications_enabled !== false) {
+        await requestNotificationPermission();
+        await refreshDueAlerts();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save profile");
     } finally {
@@ -280,9 +442,11 @@ export default function App() {
     setSaving(true);
     setError(null);
     try {
-      await apiCreate(t);
+      await apiCreate(t, dueAtFromLocalInput(newDue));
       setNewTitle("");
+      setNewDue("");
       await refresh();
+      if (user?.notifications_enabled) await refreshDueAlerts();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add");
     } finally {
@@ -342,6 +506,41 @@ export default function App() {
     }
   };
 
+  const onDueChange = async (task, localValue) => {
+    setError(null);
+    const due_at = dueAtFromLocalInput(localValue);
+    setTasks((prev) =>
+      prev.map((r) => (r.id === task.id ? { ...r, due_at } : r))
+    );
+    try {
+      await apiUpdate(task.id, { due_at });
+      if (user?.notifications_enabled) await refreshDueAlerts();
+    } catch {
+      setError("Failed to update deadline");
+      await refresh();
+    }
+  };
+
+  const onSendNotifications = async () => {
+    setSendingNotify(true);
+    setError(null);
+    setNotifyInfo(null);
+    try {
+      await requestNotificationPermission();
+      const result = await apiSendNotifications();
+      setNotifyInfo(result.message);
+      showBrowserNotifications(result.sent || []);
+      await refreshDueAlerts();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not send reminders");
+    } finally {
+      setSendingNotify(false);
+    }
+  };
+
+  const urgencyForTask = (taskId) =>
+    dueAlerts.find((item) => item.task_id === taskId)?.urgency || null;
+
   const onDragEnd = async (event) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -375,7 +574,9 @@ export default function App() {
     <div className="app-wrap">
       <header>
         <h1>{user ? `${user.name}'s tasks` : "Your tasks"}</h1>
-        <p className="sub">Add items, mark done, edit text, and drag to put them in order.</p>
+        <p className="sub">
+          Set deadlines, get reminders for tasks due within {notifyBeforeHours} hours, and drag to reorder.
+        </p>
       </header>
       {user && (
         <section className="profile-panel" aria-label="User profile">
@@ -407,6 +608,22 @@ export default function App() {
                   autoComplete="email"
                 />
               </label>
+              <label className="profile-field profile-check">
+                <input
+                  type="checkbox"
+                  checked={profileDraft.notifications_enabled}
+                  onChange={(e) =>
+                    setProfileDraft((p) => ({
+                      ...p,
+                      notifications_enabled: e.target.checked,
+                    }))
+                  }
+                />
+                <span>Enable deadline notifications (browser + email)</span>
+              </label>
+              <p className="profile-hint">
+                Add your email to receive reminder messages. Email needs SMTP settings on the server.
+              </p>
               <div className="profile-actions">
                 <button
                   type="button"
@@ -430,6 +647,10 @@ export default function App() {
                 ) : (
                   <span className="profile-email muted">No email set</span>
                 )}
+                <span className="profile-email">
+                  Notifications:{" "}
+                  {user.notifications_enabled !== false ? "On" : "Off"}
+                </span>
               </div>
               <button
                 type="button"
@@ -442,23 +663,60 @@ export default function App() {
           )}
         </section>
       )}
+      {notifyInfo && (
+        <div className="info-banner" role="status">
+          {notifyInfo}
+        </div>
+      )}
+      {user?.notifications_enabled !== false && dueAlerts.length > 0 && (
+        <section className="notify-panel" aria-label="Deadline reminders">
+          <div className="notify-panel-head">
+            <h2>Deadline reminders</h2>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={onSendNotifications}
+              disabled={sendingNotify}
+            >
+              {sendingNotify ? "Sending…" : "Send reminders"}
+            </button>
+          </div>
+          <ul className="notify-list">
+            {dueAlerts.map((item) => (
+              <li key={item.task_id} className={urgencyClass(item.urgency)}>
+                {item.message}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {error && (
         <div className="error-banner" role="alert">
           {error}
         </div>
       )}
-      <form className="add-row" onSubmit={onAdd}>
-        <input
-          type="text"
-          placeholder="New task…"
-          value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
-          maxLength={500}
-          autoComplete="off"
-        />
-        <button className="btn-primary" type="submit" disabled={!newTitle.trim() || saving}>
-          Add
-        </button>
+      <form className="add-form" onSubmit={onAdd}>
+        <div className="add-row">
+          <input
+            type="text"
+            placeholder="New task…"
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            maxLength={500}
+            autoComplete="off"
+          />
+          <button className="btn-primary" type="submit" disabled={!newTitle.trim() || saving}>
+            Add
+          </button>
+        </div>
+        <label className="add-due">
+          <span className="profile-label">Deadline (optional)</span>
+          <input
+            type="datetime-local"
+            value={newDue}
+            onChange={(e) => setNewDue(e.target.value)}
+          />
+        </label>
       </form>
       {tasks.length === 0 ? (
         <div className="list">
@@ -482,10 +740,12 @@ export default function App() {
                 <SortableTask
                   key={task.id}
                   task={task}
+                  urgency={urgencyForTask(task.id)}
                   onToggle={onToggle}
                   onSaveTitle={onSaveTitle}
                   onStartEdit={onStartEdit}
                   onDelete={onDelete}
+                  onDueChange={onDueChange}
                   editing={editingId}
                   setEditingId={setEditingId}
                   draft={editingId === task.id ? draft : task.title}
