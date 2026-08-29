@@ -14,14 +14,54 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+const fetchOpts = { credentials: "include" };
+
+async function apiMe() {
+  const r = await fetch("/api/auth/me", fetchOpts);
+  if (!r.ok) throw new Error("Failed to check login");
+  return r.json();
+}
+
+async function apiRegister({ name, email, password }) {
+  const r = await fetch("/api/auth/register", {
+    ...fetchOpts,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, email, password }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || "Could not register");
+  return d;
+}
+
+async function apiLogin({ email, password }) {
+  const r = await fetch("/api/auth/login", {
+    ...fetchOpts,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || "Could not log in");
+  return d;
+}
+
+async function apiLogout() {
+  const r = await fetch("/api/auth/logout", { ...fetchOpts, method: "POST" });
+  if (!r.ok) throw new Error("Could not log out");
+  return r.json();
+}
+
 async function apiGetUser() {
-  const r = await fetch("/api/user");
-  if (!r.ok) throw new Error(await r.text() || "Failed to load profile");
+  const r = await fetch("/api/user", fetchOpts);
+  if (r.status === 401) throw new Error("Login required");
+  if (!r.ok) throw new Error((await r.text()) || "Failed to load profile");
   return r.json();
 }
 
 async function apiUpdateUser(patch) {
   const r = await fetch("/api/user", {
+    ...fetchOpts,
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -34,8 +74,9 @@ async function apiUpdateUser(patch) {
 }
 
 async function apiList() {
-  const r = await fetch("/api/tasks");
-  if (!r.ok) throw new Error(await r.text() || "Failed to load tasks");
+  const r = await fetch("/api/tasks", fetchOpts);
+  if (r.status === 401) throw new Error("Login required");
+  if (!r.ok) throw new Error((await r.text()) || "Failed to load tasks");
   return r.json();
 }
 
@@ -43,6 +84,7 @@ async function apiCreate(title, due_at = null) {
   const body = { title, completed: false };
   if (due_at) body.due_at = due_at;
   const r = await fetch("/api/tasks", {
+    ...fetchOpts,
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -56,6 +98,7 @@ async function apiCreate(title, due_at = null) {
 
 async function apiUpdate(id, patch) {
   const r = await fetch(`/api/tasks/${id}`, {
+    ...fetchOpts,
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -68,12 +111,13 @@ async function apiUpdate(id, patch) {
 }
 
 async function apiDelete(id) {
-  const r = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
+  const r = await fetch(`/api/tasks/${id}`, { ...fetchOpts, method: "DELETE" });
   if (!r.ok) throw new Error("Delete failed");
 }
 
 async function apiReorder(taskIds) {
   const r = await fetch("/api/tasks/reorder", {
+    ...fetchOpts,
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ task_ids: taskIds }),
@@ -86,13 +130,13 @@ async function apiReorder(taskIds) {
 }
 
 async function apiGetDueNotifications() {
-  const r = await fetch("/api/notifications/due");
+  const r = await fetch("/api/notifications/due", fetchOpts);
   if (!r.ok) throw new Error("Failed to load notifications");
   return r.json();
 }
 
 async function apiSendNotifications() {
-  const r = await fetch("/api/notifications/send", { method: "POST" });
+  const r = await fetch("/api/notifications/send", { ...fetchOpts, method: "POST" });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || "Could not send notifications");
   return d;
@@ -129,6 +173,107 @@ function urgencyClass(urgency) {
   if (urgency === "overdue") return "due-overdue";
   if (urgency === "due_soon") return "due-soon";
   return "";
+}
+
+function AuthScreen({ onAuthed }) {
+  const [mode, setMode] = useState("login");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const user =
+        mode === "register"
+          ? await apiRegister({ name: name.trim(), email: email.trim(), password })
+          : await apiLogin({ email: email.trim(), password });
+      onAuthed(user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Auth failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="app-wrap auth-wrap">
+      <header>
+        <h1>Personal Todo</h1>
+        <p className="sub">
+          {mode === "login"
+            ? "Log in to see only your tasks."
+            : "Create an account so your tasks stay linked to you."}
+        </p>
+      </header>
+      <form className="auth-panel" onSubmit={onSubmit}>
+        {mode === "register" && (
+          <label className="profile-field">
+            <span className="profile-label">Name</span>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={120}
+              autoComplete="name"
+              required
+            />
+          </label>
+        )}
+        <label className="profile-field">
+          <span className="profile-label">Email</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            maxLength={255}
+            autoComplete="email"
+            required
+          />
+        </label>
+        <label className="profile-field">
+          <span className="profile-label">Password</span>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            minLength={6}
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            required
+          />
+        </label>
+        {error && (
+          <div className="error-banner" role="alert">
+            {error}
+          </div>
+        )}
+        <button className="btn-primary" type="submit" disabled={busy}>
+          {busy ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}
+        </button>
+        <p className="auth-switch">
+          {mode === "login" ? (
+            <>
+              No account yet?{" "}
+              <button type="button" className="link-btn" onClick={() => setMode("register")}>
+                Register
+              </button>
+            </>
+          ) : (
+            <>
+              Already have an account?{" "}
+              <button type="button" className="link-btn" onClick={() => setMode("login")}>
+                Log in
+              </button>
+            </>
+          )}
+        </p>
+      </form>
+    </div>
+  );
 }
 
 function SortableTask({
@@ -265,6 +410,7 @@ function SortableTask({
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [authed, setAuthed] = useState(false);
   const [tasks, setTasks] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -286,16 +432,29 @@ export default function App() {
   const [notifyInfo, setNotifyInfo] = useState(null);
   const shownBrowserAlerts = useRef(new Set());
 
+  const loadAppData = useCallback(async (profile) => {
+    setUser(profile);
+    setProfileDraft({
+      name: profile.name,
+      email: profile.email || "",
+      notifications_enabled: profile.notifications_enabled !== false,
+    });
+    const data = await apiList();
+    setTasks(data);
+    if (profile.notifications_enabled !== false) {
+      const dueData = await apiGetDueNotifications();
+      setDueAlerts(dueData.items || []);
+      setNotifyBeforeHours(dueData.notify_before_hours || 24);
+      return dueData;
+    }
+    setDueAlerts([]);
+    return { items: [] };
+  }, []);
+
   const refresh = useCallback(async () => {
     setError(null);
     const data = await apiList();
     setTasks(data);
-  }, []);
-
-  const refreshUser = useCallback(async () => {
-    const data = await apiGetUser();
-    setUser(data);
-    return data;
   }, []);
 
   const refreshDueAlerts = useCallback(async () => {
@@ -324,20 +483,22 @@ export default function App() {
     (async () => {
       try {
         setLoading(true);
-        const [profile] = await Promise.all([refreshUser(), refresh()]);
-        if (live) {
-          setProfileDraft({
-            name: profile.name,
-            email: profile.email || "",
-            notifications_enabled: profile.notifications_enabled !== false,
-          });
+        const me = await apiMe();
+        if (!live) return;
+        if (!me.user) {
+          setAuthed(false);
+          setUser(null);
+          setTasks([]);
+          return;
         }
-        if (live && profile.notifications_enabled !== false) {
-          const dueData = await refreshDueAlerts();
-          if (live) showBrowserNotifications(dueData.items || []);
-        }
+        setAuthed(true);
+        const dueData = await loadAppData(me.user);
+        if (live) showBrowserNotifications(dueData.items || []);
       } catch (e) {
-        if (live) setError(e instanceof Error ? e.message : "Load error");
+        if (live) {
+          setAuthed(false);
+          setError(e instanceof Error ? e.message : "Load error");
+        }
       } finally {
         if (live) setLoading(false);
       }
@@ -345,11 +506,11 @@ export default function App() {
     return () => {
       live = false;
     };
-  }, [refresh, refreshUser, refreshDueAlerts, showBrowserNotifications]);
+  }, [loadAppData, showBrowserNotifications]);
 
   useEffect(() => {
-    if (!user?.notifications_enabled) {
-      setDueAlerts([]);
+    if (!authed || !user?.notifications_enabled) {
+      if (!authed) setDueAlerts([]);
       return undefined;
     }
     let live = true;
@@ -366,7 +527,37 @@ export default function App() {
       live = false;
       window.clearInterval(id);
     };
-  }, [user?.notifications_enabled, refreshDueAlerts, showBrowserNotifications]);
+  }, [authed, user?.notifications_enabled, refreshDueAlerts, showBrowserNotifications]);
+
+  const onAuthed = async (profile) => {
+    setLoading(true);
+    setError(null);
+    try {
+      setAuthed(true);
+      shownBrowserAlerts.current = new Set();
+      const dueData = await loadAppData(profile);
+      showBrowserNotifications(dueData.items || []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load your tasks");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onLogout = async () => {
+    setError(null);
+    try {
+      await apiLogout();
+      setAuthed(false);
+      setUser(null);
+      setTasks([]);
+      setDueAlerts([]);
+      setEditingProfile(false);
+      shownBrowserAlerts.current = new Set();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not log out");
+    }
+  };
 
   const requestNotificationPermission = async () => {
     if (typeof Notification === "undefined") {
@@ -386,7 +577,11 @@ export default function App() {
 
   const onStartProfileEdit = () => {
     if (!user) return;
-    setProfileDraft({ name: user.name, email: user.email || "", notifications_enabled: user.notifications_enabled !== false });
+    setProfileDraft({
+      name: user.name,
+      email: user.email || "",
+      notifications_enabled: user.notifications_enabled !== false,
+    });
     setEditingProfile(true);
   };
 
@@ -407,6 +602,10 @@ export default function App() {
     const email = profileDraft.email.trim();
     if (!name) {
       setError("Name cannot be empty");
+      return;
+    }
+    if (!email || !email.includes("@")) {
+      setError("A valid email is required");
       return;
     }
     setSavingProfile(true);
@@ -570,16 +769,19 @@ export default function App() {
     );
   }
 
+  if (!authed || !user) {
+    return <AuthScreen onAuthed={onAuthed} />;
+  }
+
   return (
     <div className="app-wrap">
       <header>
-        <h1>{user ? `${user.name}'s tasks` : "Your tasks"}</h1>
+        <h1>{`${user.name}'s tasks`}</h1>
         <p className="sub">
           Set deadlines, get reminders for tasks due within {notifyBeforeHours} hours, and drag to reorder.
         </p>
       </header>
-      {user && (
-        <section className="profile-panel" aria-label="User profile">
+      <section className="profile-panel" aria-label="User profile">
           {editingProfile ? (
             <form className="profile-form" onSubmit={onSaveProfile}>
               <label className="profile-field">
@@ -604,8 +806,8 @@ export default function App() {
                     setProfileDraft((p) => ({ ...p, email: e.target.value }))
                   }
                   maxLength={255}
-                  placeholder="optional"
                   autoComplete="email"
+                  required
                 />
               </label>
               <label className="profile-field profile-check">
@@ -622,7 +824,7 @@ export default function App() {
                 <span>Enable deadline notifications (browser + email)</span>
               </label>
               <p className="profile-hint">
-                Add your email to receive reminder messages. Email needs SMTP settings on the server.
+                Reminder emails use your account email. SMTP must be configured on the server.
               </p>
               <div className="profile-actions">
                 <button
@@ -642,27 +844,28 @@ export default function App() {
             <div className="profile-view">
               <div className="profile-meta">
                 <span className="profile-name">{user.name}</span>
-                {user.email ? (
-                  <span className="profile-email">{user.email}</span>
-                ) : (
-                  <span className="profile-email muted">No email set</span>
-                )}
+                <span className="profile-email">{user.email}</span>
+                <span className="profile-email muted">User ID: {user.id}</span>
                 <span className="profile-email">
                   Notifications:{" "}
                   {user.notifications_enabled !== false ? "On" : "Off"}
                 </span>
               </div>
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={onStartProfileEdit}
-              >
-                Edit profile
-              </button>
+              <div className="profile-actions">
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={onStartProfileEdit}
+                >
+                  Edit profile
+                </button>
+                <button type="button" className="btn-ghost" onClick={onLogout}>
+                  Log out
+                </button>
+              </div>
             </div>
           )}
         </section>
-      )}
       {notifyInfo && (
         <div className="info-banner" role="status">
           {notifyInfo}

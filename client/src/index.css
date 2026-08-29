@@ -227,6 +227,46 @@ button {
   flex-wrap: wrap;
 }
 
+.auth-wrap {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.auth-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 1.25rem 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.auth-panel .btn-primary {
+  width: 100%;
+  margin-top: 0.25rem;
+}
+
+.auth-switch {
+  margin: 0.25rem 0 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.link-btn {
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  border-radius: 0;
+  font-weight: 600;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
 .profile-check {
   flex-direction: row;
   align-items: center;
