@@ -12,7 +12,12 @@ class NotificationLog(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
-    task_id = db.Column(db.Integer, db.ForeignKey("tasks.id"), nullable=False, index=True)
+    task_id = db.Column(
+        db.Integer,
+        db.ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     milestone = db.Column(db.String(20), nullable=False)
     message = db.Column(db.Text, nullable=False)
     email_status = db.Column(db.String(20), nullable=False, default="skipped")
@@ -20,7 +25,10 @@ class NotificationLog(db.Model):
     sent_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     read_at = db.Column(db.DateTime, nullable=True)
 
-    task = db.relationship("Task", backref="notification_logs")
+    task = db.relationship(
+        "Task",
+        backref=db.backref("notification_logs", cascade="all, delete-orphan"),
+    )
     user = db.relationship("User", backref="notification_logs")
 
     def to_dict(self):

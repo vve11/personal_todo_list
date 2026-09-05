@@ -1,4 +1,12 @@
 import os
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+except ImportError:
+    pass
 
 
 class Config:
@@ -26,7 +34,8 @@ class Config:
         if m.strip()
     )
     REMINDER_WINDOW_MINUTES = int(os.environ.get("REMINDER_WINDOW_MINUTES", "30"))
-    REMINDER_POLL_INTERVAL_SECONDS = int(os.environ.get("REMINDER_POLL_INTERVAL_SECONDS", "300"))
+    # Default: check deadlines / reminder status every 30 seconds
+    REMINDER_POLL_INTERVAL_SECONDS = int(os.environ.get("REMINDER_POLL_INTERVAL_SECONDS", "30"))
     REMINDER_SCHEDULER_ENABLED = os.environ.get("REMINDER_SCHEDULER_ENABLED", "1") != "0"
 
     SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()

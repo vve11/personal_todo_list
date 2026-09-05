@@ -112,7 +112,10 @@ async function apiUpdate(id, patch) {
 
 async function apiDelete(id) {
   const r = await fetch(`/api/tasks/${id}`, { ...fetchOpts, method: "DELETE" });
-  if (!r.ok) throw new Error("Delete failed");
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.error || "Delete failed");
+  }
 }
 
 async function apiReorder(taskIds) {
@@ -622,9 +625,10 @@ export default function App() {
         apiGetInbox(),
       ]);
       setDueAlerts(dueData.items || []);
-      setInbox(inboxData.items || []);
-      setUnreadCount(inboxData.unread_count || 0);
-      return { due: dueData, inbox: inboxData };
+      const unreadItems = (inboxData.items || []).filter((item) => !item.is_read);
+      setInbox(unreadItems);
+      setUnreadCount(inboxData.unread_count ?? unreadItems.length);
+      return { due: dueData, inbox: { ...inboxData, items: unreadItems } };
     }
     setDueAlerts([]);
     setInbox([]);
@@ -634,9 +638,10 @@ export default function App() {
 
   const refreshInbox = useCallback(async () => {
     const data = await apiGetInbox();
-    setInbox(data.items || []);
-    setUnreadCount(data.unread_count || 0);
-    return data;
+    const unreadItems = (data.items || []).filter((item) => !item.is_read);
+    setInbox(unreadItems);
+    setUnreadCount(data.unread_count ?? unreadItems.length);
+    return { ...data, items: unreadItems };
   }, []);
 
   const refreshDueAlerts = useCallback(async () => {
@@ -714,7 +719,7 @@ export default function App() {
         /* ignore polling errors */
       }
     };
-    const id = window.setInterval(tick, 60_000);
+    const id = window.setInterval(tick, 30_000);
     return () => {
       live = false;
       window.clearInterval(id);
@@ -896,8 +901,11 @@ export default function App() {
     try {
       await apiDelete(id);
       setTasks((prev) => prev.filter((x) => x.id !== id));
-    } catch {
-      setError("Delete failed");
+      if (user?.notifications_enabled) {
+        await Promise.all([refreshDueAlerts(), refreshInbox()]);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
       await refresh();
     }
   };
@@ -928,7 +936,8 @@ export default function App() {
   const onMarkInboxRead = async (logId) => {
     try {
       await apiMarkNotificationRead(logId);
-      await refreshInbox();
+      setInbox((prev) => prev.filter((item) => item.id !== logId));
+      setUnreadCount((count) => Math.max(0, count - 1));
     } catch {
       setError("Could not mark notification read");
     }
@@ -937,7 +946,8 @@ export default function App() {
   const onMarkAllInboxRead = async () => {
     try {
       await apiMarkAllNotificationsRead();
-      await refreshInbox();
+      setInbox([]);
+      setUnreadCount(0);
     } catch {
       setError("Could not mark all notifications read");
     }
@@ -1072,7 +1082,7 @@ export default function App() {
             </div>
           )}
         </section>
-      {user?.notifications_enabled !== false && (inbox.length > 0 || dueAlerts.length > 0) && (
+      {user?.notifications_enabled !== false && inbox.length > 0 && (
         <section className="notify-panel" aria-label="Deadline reminders">
           <div className="notify-panel-head">
             <h2>
@@ -1085,37 +1095,23 @@ export default function App() {
               </button>
             )}
           </div>
-          {inbox.length > 0 ? (
-            <ul className="notify-list">
-              {inbox.map((item) => (
-                <li
-                  key={item.id}
-                  className={`${urgencyClass(item.milestone)}${item.is_read ? " is-read" : ""}`}
+          <ul className="notify-list">
+            {inbox.map((item) => (
+              <li key={item.id} className={urgencyClass(item.milestone)}>
+                <button
+                  type="button"
+                  className="notify-item-btn"
+                  onClick={() => onMarkInboxRead(item.id)}
                 >
-                  <button
-                    type="button"
-                    className="notify-item-btn"
-                    onClick={() => !item.is_read && onMarkInboxRead(item.id)}
-                  >
-                    <span className="notify-milestone">{milestoneLabel(item.milestone)}</span>
-                    <span>{item.message}</span>
-                    <span className="notify-time">{formatDueLabel(item.sent_at)}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <ul className="notify-list">
-              {dueAlerts.map((item) => (
-                <li key={`${item.task_id}-${item.milestone}`} className={urgencyClass(item.milestone)}>
                   <span className="notify-milestone">{milestoneLabel(item.milestone)}</span>
                   <span>{item.message}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+                  <span className="notify-time">{formatDueLabel(item.sent_at)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
           <p className="profile-hint notify-foot">
-            The server checks deadlines every 5 minutes while it is running. In-app reminders persist here.
+            The server checks deadlines every 30 seconds while it is running. In-app reminders persist here.
           </p>
         </section>
       )}
