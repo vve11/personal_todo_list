@@ -135,23 +135,57 @@ async function apiGetDueNotifications() {
   return r.json();
 }
 
-async function apiSendNotifications() {
-  const r = await fetch("/api/notifications/send", { ...fetchOpts, method: "POST" });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || "Could not send notifications");
-  return d;
+async function apiGetInbox() {
+  const r = await fetch("/api/notifications/inbox", fetchOpts);
+  if (!r.ok) throw new Error("Failed to load inbox");
+  return r.json();
 }
 
-function toDatetimeLocalValue(iso) {
+async function apiMarkNotificationRead(logId) {
+  const r = await fetch(`/api/notifications/inbox/${logId}/read`, {
+    ...fetchOpts,
+    method: "PATCH",
+  });
+  if (!r.ok) throw new Error("Could not mark notification read");
+  return r.json();
+}
+
+async function apiMarkAllNotificationsRead() {
+  const r = await fetch("/api/notifications/inbox/read-all", {
+    ...fetchOpts,
+    method: "POST",
+  });
+  if (!r.ok) throw new Error("Could not mark all read");
+  return r.json();
+}
+
+function toDatePart(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function toTimePart(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function combineDateTime(datePart, timePart) {
+  if (!datePart) return null;
+  const time = timePart || "23:59";
+  const d = new Date(`${datePart}T${time}`);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
 }
 
 function dueAtFromLocalInput(value) {
   if (!value) return null;
+  // Accept either "YYYY-MM-DDTHH:MM" or ISO
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
@@ -169,10 +203,118 @@ function formatDueLabel(iso) {
   });
 }
 
-function urgencyClass(urgency) {
-  if (urgency === "overdue") return "due-overdue";
-  if (urgency === "due_soon") return "due-soon";
+function DeadlinePicker({
+  idPrefix,
+  dateValue,
+  timeValue,
+  onDateChange,
+  onTimeChange,
+  onClear,
+  showClear,
+  urgencyClassName = "",
+}) {
+  const dateRef = useRef(null);
+  const timeRef = useRef(null);
+
+  const openPicker = (el) => {
+    if (!el) return;
+    el.focus();
+    if (typeof el.showPicker === "function") {
+      try {
+        el.showPicker();
+      } catch {
+        /* Some browsers only allow showPicker from direct user gestures */
+      }
+    }
+  };
+
+  return (
+    <div className="deadline-picker">
+      <input
+        ref={dateRef}
+        id={`${idPrefix}-date`}
+        type="date"
+        className={`deadline-date ${urgencyClassName}`}
+        value={dateValue}
+        onChange={(e) => onDateChange(e.target.value)}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          openPicker(e.currentTarget);
+        }}
+        title="Pick date"
+        aria-label="Deadline date"
+      />
+      <button
+        type="button"
+        className="btn-ghost deadline-open-btn"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openPicker(dateRef.current);
+        }}
+      >
+        Date
+      </button>
+      <input
+        ref={timeRef}
+        id={`${idPrefix}-time`}
+        type="time"
+        className={`deadline-time ${urgencyClassName}`}
+        value={timeValue}
+        onChange={(e) => onTimeChange(e.target.value)}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          openPicker(e.currentTarget);
+        }}
+        title="Pick time"
+        aria-label="Deadline time"
+      />
+      <button
+        type="button"
+        className="btn-ghost deadline-open-btn"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openPicker(timeRef.current);
+        }}
+      >
+        Time
+      </button>
+      {showClear && (
+        <button
+          type="button"
+          className="btn-ghost due-clear-btn"
+          title="Clear deadline"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onClear();
+          }}
+        >
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}
+
+function urgencyClass(milestone) {
+  if (milestone === "overdue") return "due-overdue";
+  if (milestone === "1h") return "due-soon";
+  if (milestone === "6h" || milestone === "24h") return "due-upcoming";
   return "";
+}
+
+function milestoneLabel(milestone) {
+  if (milestone === "overdue") return "Overdue";
+  if (milestone === "1h") return "1 hour";
+  if (milestone === "6h") return "6 hours";
+  if (milestone === "24h") return "24 hours";
+  return milestone;
 }
 
 function AuthScreen({ onAuthed }) {
@@ -303,6 +445,26 @@ function SortableTask({
     transition,
   };
   const isEd = editing === task.id;
+  const [dateDraft, setDateDraft] = useState(() => toDatePart(task.due_at));
+  const [timeDraft, setTimeDraft] = useState(() => toTimePart(task.due_at) || "23:59");
+
+  useEffect(() => {
+    setDateDraft(toDatePart(task.due_at));
+    setTimeDraft(toTimePart(task.due_at) || "23:59");
+  }, [task.due_at]);
+
+  const saveDueParts = (nextDate, nextTime) => {
+    if (!nextDate) {
+      if (task.due_at) onDueChange(task, "");
+      return;
+    }
+    const iso = combineDateTime(nextDate, nextTime || "23:59");
+    if (!iso) return;
+    const prev = task.due_at || null;
+    if (prev && Math.abs(new Date(iso) - new Date(prev)) < 1000) return;
+    onDueChange(task, iso);
+  };
+
   return (
     <li
       ref={setNodeRef}
@@ -362,26 +524,39 @@ function SortableTask({
           </span>
         )}
         {!task.completed && (
-          <label className="task-due-field">
-            <span className="sr-only">Deadline</span>
-            <input
-              type="datetime-local"
-              className={`task-due-input ${urgencyClass(urgency)}`}
-              value={toDatetimeLocalValue(task.due_at)}
-              onChange={(e) => onDueChange(task, e.target.value)}
-              title="Set deadline"
+          <div className="task-due-field">
+            <span className="task-due-label-text">Deadline</span>
+            <DeadlinePicker
+              idPrefix={`due-${task.id}`}
+              dateValue={dateDraft}
+              timeValue={timeDraft}
+              urgencyClassName={urgencyClass(urgency)}
+              showClear={Boolean(dateDraft || task.due_at)}
+              onDateChange={(value) => {
+                setDateDraft(value);
+                saveDueParts(value, timeDraft);
+              }}
+              onTimeChange={(value) => {
+                setTimeDraft(value);
+                if (dateDraft) saveDueParts(dateDraft, value);
+              }}
+              onClear={() => {
+                setDateDraft("");
+                setTimeDraft("23:59");
+                onDueChange(task, "");
+              }}
             />
             {task.due_at && (
               <span className={`task-due-label ${urgencyClass(urgency)}`}>
                 {urgency === "overdue"
                   ? "Overdue"
-                  : urgency === "due_soon"
-                    ? "Due soon"
+                  : urgency
+                    ? `Due in ${milestoneLabel(urgency)}`
                     : "Due"}{" "}
                 · {formatDueLabel(task.due_at)}
               </span>
             )}
-          </label>
+          </div>
         )}
       </div>
       <div className="row-actions">
@@ -415,7 +590,8 @@ export default function App() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [newTitle, setNewTitle] = useState("");
-  const [newDue, setNewDue] = useState("");
+  const [newDueDate, setNewDueDate] = useState("");
+  const [newDueTime, setNewDueTime] = useState("23:59");
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState("");
@@ -427,9 +603,8 @@ export default function App() {
   });
   const [savingProfile, setSavingProfile] = useState(false);
   const [dueAlerts, setDueAlerts] = useState([]);
-  const [notifyBeforeHours, setNotifyBeforeHours] = useState(24);
-  const [sendingNotify, setSendingNotify] = useState(false);
-  const [notifyInfo, setNotifyInfo] = useState(null);
+  const [inbox, setInbox] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   const shownBrowserAlerts = useRef(new Set());
 
   const loadAppData = useCallback(async (profile) => {
@@ -442,13 +617,32 @@ export default function App() {
     const data = await apiList();
     setTasks(data);
     if (profile.notifications_enabled !== false) {
-      const dueData = await apiGetDueNotifications();
+      const [dueData, inboxData] = await Promise.all([
+        apiGetDueNotifications(),
+        apiGetInbox(),
+      ]);
       setDueAlerts(dueData.items || []);
-      setNotifyBeforeHours(dueData.notify_before_hours || 24);
-      return dueData;
+      setInbox(inboxData.items || []);
+      setUnreadCount(inboxData.unread_count || 0);
+      return { due: dueData, inbox: inboxData };
     }
     setDueAlerts([]);
-    return { items: [] };
+    setInbox([]);
+    setUnreadCount(0);
+    return { due: { items: [] }, inbox: { items: [] } };
+  }, []);
+
+  const refreshInbox = useCallback(async () => {
+    const data = await apiGetInbox();
+    setInbox(data.items || []);
+    setUnreadCount(data.unread_count || 0);
+    return data;
+  }, []);
+
+  const refreshDueAlerts = useCallback(async () => {
+    const data = await apiGetDueNotifications();
+    setDueAlerts(data.items || []);
+    return data;
   }, []);
 
   const refresh = useCallback(async () => {
@@ -457,23 +651,17 @@ export default function App() {
     setTasks(data);
   }, []);
 
-  const refreshDueAlerts = useCallback(async () => {
-    const data = await apiGetDueNotifications();
-    setDueAlerts(data.items || []);
-    setNotifyBeforeHours(data.notify_before_hours || 24);
-    return data;
-  }, []);
-
   const showBrowserNotifications = useCallback((items) => {
     if (!items.length || typeof Notification === "undefined") return;
     if (Notification.permission !== "granted") return;
     for (const item of items) {
-      const tag = `${item.task_id}-${item.urgency}`;
+      if (item.is_read) continue;
+      const tag = `inbox-${item.id}`;
       if (shownBrowserAlerts.current.has(tag)) continue;
       shownBrowserAlerts.current.add(tag);
-      new Notification(item.urgency === "overdue" ? "Task overdue" : "Task due soon", {
+      new Notification(`Reminder: ${milestoneLabel(item.milestone)}`, {
         body: item.message,
-        tag: `todo-${item.task_id}`,
+        tag,
       });
     }
   }, []);
@@ -492,8 +680,8 @@ export default function App() {
           return;
         }
         setAuthed(true);
-        const dueData = await loadAppData(me.user);
-        if (live) showBrowserNotifications(dueData.items || []);
+        const loaded = await loadAppData(me.user);
+        if (live) showBrowserNotifications(loaded.inbox?.items || []);
       } catch (e) {
         if (live) {
           setAuthed(false);
@@ -510,14 +698,18 @@ export default function App() {
 
   useEffect(() => {
     if (!authed || !user?.notifications_enabled) {
-      if (!authed) setDueAlerts([]);
+      if (!authed) {
+        setDueAlerts([]);
+        setInbox([]);
+        setUnreadCount(0);
+      }
       return undefined;
     }
     let live = true;
     const tick = async () => {
       try {
-        const data = await refreshDueAlerts();
-        if (live) showBrowserNotifications(data.items || []);
+        const [inboxData] = await Promise.all([refreshInbox(), refreshDueAlerts()]);
+        if (live) showBrowserNotifications(inboxData.items || []);
       } catch {
         /* ignore polling errors */
       }
@@ -527,7 +719,7 @@ export default function App() {
       live = false;
       window.clearInterval(id);
     };
-  }, [authed, user?.notifications_enabled, refreshDueAlerts, showBrowserNotifications]);
+  }, [authed, user?.notifications_enabled, refreshInbox, refreshDueAlerts, showBrowserNotifications]);
 
   const onAuthed = async (profile) => {
     setLoading(true);
@@ -535,8 +727,8 @@ export default function App() {
     try {
       setAuthed(true);
       shownBrowserAlerts.current = new Set();
-      const dueData = await loadAppData(profile);
-      showBrowserNotifications(dueData.items || []);
+      const loaded = await loadAppData(profile);
+      showBrowserNotifications(loaded.inbox?.items || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load your tasks");
     } finally {
@@ -552,6 +744,8 @@ export default function App() {
       setUser(null);
       setTasks([]);
       setDueAlerts([]);
+      setInbox([]);
+      setUnreadCount(0);
       setEditingProfile(false);
       shownBrowserAlerts.current = new Set();
     } catch (err) {
@@ -625,7 +819,7 @@ export default function App() {
       setEditingProfile(false);
       if (updated.notifications_enabled !== false) {
         await requestNotificationPermission();
-        await refreshDueAlerts();
+        await Promise.all([refreshDueAlerts(), refreshInbox()]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save profile");
@@ -641,11 +835,14 @@ export default function App() {
     setSaving(true);
     setError(null);
     try {
-      await apiCreate(t, dueAtFromLocalInput(newDue));
+      await apiCreate(t, combineDateTime(newDueDate, newDueTime));
       setNewTitle("");
-      setNewDue("");
+      setNewDueDate("");
+      setNewDueTime("23:59");
       await refresh();
-      if (user?.notifications_enabled) await refreshDueAlerts();
+      if (user?.notifications_enabled) {
+        await Promise.all([refreshDueAlerts(), refreshInbox()]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add");
     } finally {
@@ -705,40 +902,49 @@ export default function App() {
     }
   };
 
-  const onDueChange = async (task, localValue) => {
+  const onDueChange = async (task, value) => {
     setError(null);
-    const due_at = dueAtFromLocalInput(localValue);
+    // Accept ISO string, local datetime string, or empty clear
+    const due_at =
+      value === "" || value == null
+        ? null
+        : value.includes("T") && value.endsWith("Z")
+          ? value
+          : dueAtFromLocalInput(value);
     setTasks((prev) =>
       prev.map((r) => (r.id === task.id ? { ...r, due_at } : r))
     );
     try {
       await apiUpdate(task.id, { due_at });
-      if (user?.notifications_enabled) await refreshDueAlerts();
+      if (user?.notifications_enabled) {
+        await Promise.all([refreshDueAlerts(), refreshInbox()]);
+      }
     } catch {
       setError("Failed to update deadline");
       await refresh();
     }
   };
 
-  const onSendNotifications = async () => {
-    setSendingNotify(true);
-    setError(null);
-    setNotifyInfo(null);
+  const onMarkInboxRead = async (logId) => {
     try {
-      await requestNotificationPermission();
-      const result = await apiSendNotifications();
-      setNotifyInfo(result.message);
-      showBrowserNotifications(result.sent || []);
-      await refreshDueAlerts();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not send reminders");
-    } finally {
-      setSendingNotify(false);
+      await apiMarkNotificationRead(logId);
+      await refreshInbox();
+    } catch {
+      setError("Could not mark notification read");
+    }
+  };
+
+  const onMarkAllInboxRead = async () => {
+    try {
+      await apiMarkAllNotificationsRead();
+      await refreshInbox();
+    } catch {
+      setError("Could not mark all notifications read");
     }
   };
 
   const urgencyForTask = (taskId) =>
-    dueAlerts.find((item) => item.task_id === taskId)?.urgency || null;
+    dueAlerts.find((item) => item.task_id === taskId)?.milestone || null;
 
   const onDragEnd = async (event) => {
     const { active, over } = event;
@@ -778,7 +984,7 @@ export default function App() {
       <header>
         <h1>{`${user.name}'s tasks`}</h1>
         <p className="sub">
-          Set deadlines, get reminders for tasks due within {notifyBeforeHours} hours, and drag to reorder.
+          Reminders are sent automatically at 24h, 6h, 1h before deadline, and once when overdue.
         </p>
       </header>
       <section className="profile-panel" aria-label="User profile">
@@ -824,7 +1030,7 @@ export default function App() {
                 <span>Enable deadline notifications (browser + email)</span>
               </label>
               <p className="profile-hint">
-                Reminder emails use your account email. SMTP must be configured on the server.
+                Email reminders are sent automatically while the server is running (when SMTP is configured).
               </p>
               <div className="profile-actions">
                 <button
@@ -866,31 +1072,51 @@ export default function App() {
             </div>
           )}
         </section>
-      {notifyInfo && (
-        <div className="info-banner" role="status">
-          {notifyInfo}
-        </div>
-      )}
-      {user?.notifications_enabled !== false && dueAlerts.length > 0 && (
+      {user?.notifications_enabled !== false && (inbox.length > 0 || dueAlerts.length > 0) && (
         <section className="notify-panel" aria-label="Deadline reminders">
           <div className="notify-panel-head">
-            <h2>Deadline reminders</h2>
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={onSendNotifications}
-              disabled={sendingNotify}
-            >
-              {sendingNotify ? "Sending…" : "Send reminders"}
-            </button>
+            <h2>
+              Reminders
+              {unreadCount > 0 && <span className="notify-badge">{unreadCount}</span>}
+            </h2>
+            {unreadCount > 0 && (
+              <button type="button" className="btn-ghost" onClick={onMarkAllInboxRead}>
+                Mark all read
+              </button>
+            )}
           </div>
-          <ul className="notify-list">
-            {dueAlerts.map((item) => (
-              <li key={item.task_id} className={urgencyClass(item.urgency)}>
-                {item.message}
-              </li>
-            ))}
-          </ul>
+          {inbox.length > 0 ? (
+            <ul className="notify-list">
+              {inbox.map((item) => (
+                <li
+                  key={item.id}
+                  className={`${urgencyClass(item.milestone)}${item.is_read ? " is-read" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="notify-item-btn"
+                    onClick={() => !item.is_read && onMarkInboxRead(item.id)}
+                  >
+                    <span className="notify-milestone">{milestoneLabel(item.milestone)}</span>
+                    <span>{item.message}</span>
+                    <span className="notify-time">{formatDueLabel(item.sent_at)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul className="notify-list">
+              {dueAlerts.map((item) => (
+                <li key={`${item.task_id}-${item.milestone}`} className={urgencyClass(item.milestone)}>
+                  <span className="notify-milestone">{milestoneLabel(item.milestone)}</span>
+                  <span>{item.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="profile-hint notify-foot">
+            The server checks deadlines every 5 minutes while it is running. In-app reminders persist here.
+          </p>
         </section>
       )}
       {error && (
@@ -912,14 +1138,21 @@ export default function App() {
             Add
           </button>
         </div>
-        <label className="add-due">
+        <div className="add-due">
           <span className="profile-label">Deadline (optional)</span>
-          <input
-            type="datetime-local"
-            value={newDue}
-            onChange={(e) => setNewDue(e.target.value)}
+          <DeadlinePicker
+            idPrefix="new-due"
+            dateValue={newDueDate}
+            timeValue={newDueTime}
+            showClear={Boolean(newDueDate)}
+            onDateChange={setNewDueDate}
+            onTimeChange={setNewDueTime}
+            onClear={() => {
+              setNewDueDate("");
+              setNewDueTime("23:59");
+            }}
           />
-        </label>
+        </div>
       </form>
       {tasks.length === 0 ? (
         <div className="list">

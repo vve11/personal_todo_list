@@ -25,3 +25,6 @@ class UserRepository:
     def save(self, user: User) -> User:
         db.session.commit()
         return user
+
+    def list_with_notifications_enabled(self) -> list[User]:
+        return User.query.filter_by(notifications_enabled=True).all()

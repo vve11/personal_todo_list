@@ -1,120 +1,81 @@
 from typing import Optional
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from app.config import Config
-from app.extensions import db
-from app.exceptions import ValidationError
-from app.models import Task, User
-from app.repositories import TaskRepository
-from app.utils.email_sender import send_email
+from app.exceptions import NotFoundError
+from app.models import User
+from app.repositories import NotificationLogRepository, TaskRepository
 
 
 class NotificationService:
-    def __init__(self, task_repo: Optional[TaskRepository] = None):
+    def __init__(
+        self,
+        task_repo: Optional[TaskRepository] = None,
+        log_repo: Optional[NotificationLogRepository] = None,
+    ):
         self.task_repo = task_repo or TaskRepository()
+        self.log_repo = log_repo or NotificationLogRepository()
 
     def list_due(self, user: User) -> dict:
+        """Preview upcoming reminders (before cron fires)."""
         now = datetime.utcnow()
         items = []
         for task in self.task_repo.list_by_user(user.id):
-            urgency = self._task_urgency(task, now)
-            if urgency:
-                items.append(self._notification_payload(task, urgency))
+            milestone = self._preview_milestone(task, now)
+            if milestone:
+                items.append(self._preview_payload(task, milestone))
         return {
             "notifications_enabled": user.notifications_enabled,
-            "notify_before_hours": Config.NOTIFY_BEFORE_HOURS,
+            "milestones": list(Config.REMINDER_MILESTONES),
             "items": items,
         }
 
-    def send_reminders(self, user: User) -> dict:
-        if not user.notifications_enabled:
-            raise ValidationError("Notifications are disabled in your profile")
-
-        now = datetime.utcnow()
-        due_tasks = [
-            task
-            for task in self.task_repo.list_by_user_ordered_by_due(user.id)
-            if self._should_send_notification(task, now)
-        ]
-
-        if not due_tasks:
-            return {
-                "sent": [],
-                "skipped": [],
-                "message": "No tasks need a reminder right now.",
-            }
-
-        messages = []
-        email_results = []
-        for task in due_tasks:
-            urgency = self._task_urgency(task, now)
-            msg = self._deadline_message(task, urgency)
-            messages.append(self._notification_payload(task, urgency))
-            task.last_notified_at = now
-
-            if user.email:
-                subject = (
-                    f"[Todo] Overdue: {task.title}"
-                    if urgency == "overdue"
-                    else f"[Todo] Due soon: {task.title}"
-                )
-                body = (
-                    f"Hi {user.name},\n\n"
-                    f"{msg}\n\n"
-                    "Open your todo list to mark it done or update the deadline.\n"
-                )
-                ok, detail = send_email(user.email, subject, body)
-                email_results.append(
-                    {"task_id": task.id, "email": user.email, "ok": ok, "detail": detail}
-                )
-            else:
-                email_results.append(
-                    {
-                        "task_id": task.id,
-                        "email": None,
-                        "ok": False,
-                        "detail": "No email on profile — in-app notification only",
-                    }
-                )
-
-        db.session.commit()
+    def inbox(self, user: User) -> dict:
+        logs = self.log_repo.list_inbox_for_user(user.id)
+        unread = self.log_repo.count_unread_for_user(user.id)
         return {
-            "sent": messages,
-            "email_results": email_results,
-            "message": f"Notified about {len(messages)} task(s).",
+            "unread_count": unread,
+            "items": [log.to_dict() for log in logs],
         }
 
-    def _task_urgency(self, task: Task, now: Optional[datetime] = None):
+    def mark_read(self, user: User, log_id: int) -> dict:
+        log = self.log_repo.get_for_user(user.id, log_id)
+        if log is None:
+            raise NotFoundError("Notification not found")
+        self.log_repo.mark_read(log)
+        return log.to_dict()
+
+    def mark_all_read(self, user: User) -> dict:
+        count = self.log_repo.mark_all_read(user.id)
+        return {"marked_read": count}
+
+    def _preview_milestone(self, task, now: datetime):
         if task.completed or task.due_at is None:
             return None
-        now = now or datetime.utcnow()
         seconds_left = (task.due_at - now).total_seconds()
         if seconds_left < 0:
             return "overdue"
-        if seconds_left <= Config.NOTIFY_BEFORE_HOURS * 3600:
-            return "due_soon"
+        if seconds_left <= 3600:
+            return "1h"
+        if seconds_left <= 6 * 3600:
+            return "6h"
+        if seconds_left <= 24 * 3600:
+            return "24h"
         return None
 
-    def _deadline_message(self, task: Task, urgency: str) -> str:
+    def _preview_payload(self, task, milestone: str) -> dict:
         when = task.due_at.strftime("%Y-%m-%d %H:%M UTC")
-        if urgency == "overdue":
-            return f'Task "{task.title}" is overdue (deadline was {when}).'
-        return f'Task "{task.title}" is due soon (deadline: {when}).'
-
-    def _should_send_notification(self, task: Task, now: datetime) -> bool:
-        if self._task_urgency(task, now) is None:
-            return False
-        if task.last_notified_at is None:
-            return True
-        cooldown = timedelta(hours=Config.NOTIFY_COOLDOWN_HOURS)
-        return now - task.last_notified_at >= cooldown
-
-    def _notification_payload(self, task: Task, urgency: str) -> dict:
+        labels = {
+            "24h": f'"{task.title}" due in ~24h ({when})',
+            "6h": f'"{task.title}" due in ~6h ({when})',
+            "1h": f'"{task.title}" due in ~1h ({when})',
+            "overdue": f'"{task.title}" is overdue ({when})',
+        }
         return {
             "task_id": task.id,
             "title": task.title,
-            "due_at": task.due_at.isoformat() + "Z" if task.due_at else None,
-            "urgency": urgency,
-            "message": self._deadline_message(task, urgency),
+            "due_at": task.due_at.isoformat() + "Z",
+            "milestone": milestone,
+            "message": labels.get(milestone, task.title),
         }

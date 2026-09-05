@@ -5,6 +5,7 @@ from app.config import Config
 from app.controllers import auth_bp, notification_bp, static_bp, task_bp, user_bp
 from app.database.schema import ensure_schema
 from app.extensions import db
+from app.jobs.scheduler import start_reminder_scheduler
 
 
 def create_app(config_class=Config) -> Flask:
@@ -30,5 +31,7 @@ def create_app(config_class=Config) -> Flask:
 
     with app.app_context():
         ensure_schema()
+
+    start_reminder_scheduler(app)
 
     return app

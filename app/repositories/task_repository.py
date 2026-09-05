@@ -1,8 +1,7 @@
+from datetime import datetime, timedelta
 from typing import Optional
 
-from datetime import datetime
-
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 
 from app.extensions import db
 from app.models import Task
@@ -60,6 +59,22 @@ class TaskRepository:
             )
         db.session.commit()
         return self.list_by_user(user_id)
+
+    def list_reminder_candidates(self, horizon_hours: int = 25) -> list[Task]:
+        now = datetime.utcnow()
+        horizon = now + timedelta(hours=horizon_hours)
+        return (
+            Task.query.filter(
+                Task.completed.is_(False),
+                Task.due_at.isnot(None),
+                or_(
+                    and_(Task.due_at > now, Task.due_at <= horizon),
+                    Task.due_at <= now,
+                ),
+            )
+            .order_by(Task.due_at.asc(), Task.id.asc())
+            .all()
+        )
 
     def list_by_user_ordered_by_due(self, user_id: int) -> list[Task]:
         return (

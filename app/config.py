@@ -20,6 +20,15 @@ class Config:
     NOTIFY_BEFORE_HOURS = int(os.environ.get("NOTIFY_BEFORE_HOURS", "24"))
     NOTIFY_COOLDOWN_HOURS = int(os.environ.get("NOTIFY_COOLDOWN_HOURS", "6"))
 
+    REMINDER_MILESTONES = tuple(
+        m.strip()
+        for m in os.environ.get("REMINDER_MILESTONES", "24h,6h,1h,overdue").split(",")
+        if m.strip()
+    )
+    REMINDER_WINDOW_MINUTES = int(os.environ.get("REMINDER_WINDOW_MINUTES", "30"))
+    REMINDER_POLL_INTERVAL_SECONDS = int(os.environ.get("REMINDER_POLL_INTERVAL_SECONDS", "300"))
+    REMINDER_SCHEDULER_ENABLED = os.environ.get("REMINDER_SCHEDULER_ENABLED", "1") != "0"
+
     SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
     SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
     SMTP_USER = os.environ.get("SMTP_USER", "").strip()
