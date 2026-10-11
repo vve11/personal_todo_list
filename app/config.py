@@ -13,8 +13,17 @@ class Config:
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-todo-secret-change-me")
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_HTTPONLY = True
+    # Render terminates HTTPS and sets RENDER=true. Local HTTP keeps this off.
+    SESSION_COOKIE_SECURE = os.environ.get("RENDER") == "true"
 
-    _db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "todos.db")
+    _default_db = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "todos.db",
+    )
+    _db_path = os.environ.get("SQLITE_PATH", _default_db)
+    _db_dir = os.path.dirname(_db_path)
+    if _db_dir:
+        os.makedirs(_db_dir, exist_ok=True)
     SQLALCHEMY_DATABASE_URI = f"sqlite:///{_db_path}"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
