@@ -9,22 +9,33 @@ except ImportError:
     pass
 
 
+def _database_uri() -> str:
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if url:
+        if url.startswith("postgres://"):
+            url = "postgresql+psycopg://" + url[len("postgres://") :]
+        elif url.startswith("postgresql://"):
+            url = "postgresql+psycopg://" + url[len("postgresql://") :]
+        return url
+
+    db_path = os.environ.get(
+        "SQLITE_PATH",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "todos.db"),
+    )
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+    return f"sqlite:///{db_path}"
+
+
 class Config:
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-todo-secret-change-me")
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_HTTPONLY = True
-    # Render terminates HTTPS and sets RENDER=true. Local HTTP keeps this off.
-    SESSION_COOKIE_SECURE = os.environ.get("RENDER") == "true"
+    # Render sets RENDER=true. Vercel sets VERCEL=1. Local HTTP keeps this off.
+    SESSION_COOKIE_SECURE = os.environ.get("RENDER") == "true" or os.environ.get("VERCEL") == "1"
 
-    _default_db = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "todos.db",
-    )
-    _db_path = os.environ.get("SQLITE_PATH", _default_db)
-    _db_dir = os.path.dirname(_db_path)
-    if _db_dir:
-        os.makedirs(_db_dir, exist_ok=True)
-    SQLALCHEMY_DATABASE_URI = f"sqlite:///{_db_path}"
+    SQLALCHEMY_DATABASE_URI = _database_uri()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     CORS_ORIGINS = [
@@ -45,7 +56,11 @@ class Config:
     REMINDER_WINDOW_MINUTES = int(os.environ.get("REMINDER_WINDOW_MINUTES", "30"))
     # Default: check deadlines / reminder status every 30 seconds
     REMINDER_POLL_INTERVAL_SECONDS = int(os.environ.get("REMINDER_POLL_INTERVAL_SECONDS", "30"))
-    REMINDER_SCHEDULER_ENABLED = os.environ.get("REMINDER_SCHEDULER_ENABLED", "1") != "0"
+    # Vercel stops the process after each request, so the background reminder thread cannot stay running.
+    REMINDER_SCHEDULER_ENABLED = (
+        os.environ.get("VERCEL") != "1"
+        and os.environ.get("REMINDER_SCHEDULER_ENABLED", "1") != "0"
+    )
 
     SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
     SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))

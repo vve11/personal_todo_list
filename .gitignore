@@ -7,6 +7,7 @@ todos.db
 node_modules/
 client/node_modules/
 client/dist/
+public/
 .DS_Store
 *.pyc
 .env

@@ -1,0 +1,5 @@
+[tool.vercel]
+entrypoint = "server:app"
+
+[tool.vercel.scripts]
+build = "cd client && npm ci && npm run build && cd .. && rm -rf public && mkdir -p public && cp -R client/dist/. public/"
