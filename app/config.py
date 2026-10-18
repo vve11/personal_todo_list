@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 try:
     from dotenv import load_dotenv
@@ -13,10 +14,17 @@ def _database_uri() -> str:
     url = os.environ.get("DATABASE_URL", "").strip()
     if url:
         if url.startswith("postgres://"):
-            url = "postgresql+psycopg://" + url[len("postgres://") :]
-        elif url.startswith("postgresql://"):
+            url = "postgresql://" + url[len("postgres://") :]
+        if url.startswith("postgresql://"):
             url = "postgresql+psycopg://" + url[len("postgresql://") :]
-        return url
+        parts = urlsplit(url)
+        # Neon appends channel_binding=require. The pooler and psycopg reject that option.
+        query = [
+            (key, value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            if key != "channel_binding"
+        ]
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
     db_path = os.environ.get(
         "SQLITE_PATH",
@@ -37,6 +45,11 @@ class Config:
 
     SQLALCHEMY_DATABASE_URI = _database_uri()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_ENGINE_OPTIONS = (
+        {"pool_pre_ping": True, "connect_args": {"prepare_threshold": None}}
+        if SQLALCHEMY_DATABASE_URI.startswith("postgresql")
+        else {}
+    )
 
     CORS_ORIGINS = [
         "http://127.0.0.1:5173",

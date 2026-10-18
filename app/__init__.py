@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 from app.config import Config
@@ -29,9 +29,21 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(notification_bp)
     app.register_blueprint(static_bp)
 
-    with app.app_context():
-        ensure_schema()
+    schema_error = None
+    try:
+        with app.app_context():
+            ensure_schema()
+    except Exception as exc:
+        schema_error = exc
+        app.logger.exception("Database initialization failed")
 
-    start_reminder_scheduler(app)
+    @app.before_request
+    def reject_api_when_database_unavailable():
+        if schema_error is None or not request.path.startswith("/api/"):
+            return None
+        return jsonify({"error": "Database connection failed", "detail": str(schema_error)}), 503
+
+    if schema_error is None:
+        start_reminder_scheduler(app)
 
     return app
