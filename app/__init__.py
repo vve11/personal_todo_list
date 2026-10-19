@@ -1,3 +1,5 @@
+import os
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
@@ -30,18 +32,23 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(static_bp)
 
     schema_error = None
-    try:
-        with app.app_context():
-            ensure_schema()
-    except Exception as exc:
-        schema_error = exc
-        app.logger.exception("Database initialization failed")
+    if os.environ.get("VERCEL") == "1" and not os.environ.get("DATABASE_URL", "").strip():
+        schema_error = RuntimeError(
+            "DATABASE_URL is missing. Add it under Vercel Settings → Environment Variables for Production, then redeploy."
+        )
+    else:
+        try:
+            with app.app_context():
+                ensure_schema()
+        except Exception as exc:
+            schema_error = exc
+            app.logger.exception("Database initialization failed")
 
     @app.before_request
     def reject_api_when_database_unavailable():
         if schema_error is None or not request.path.startswith("/api/"):
             return None
-        return jsonify({"error": "Database connection failed", "detail": str(schema_error)}), 503
+        return jsonify({"error": f"Database connection failed: {schema_error}"}), 503
 
     if schema_error is None:
         start_reminder_scheduler(app)

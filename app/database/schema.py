@@ -39,10 +39,10 @@ def ensure_schema() -> None:
             {"uid": owner_id},
         )
 
-    db.session.execute(
-        text(
-            "UPDATE tasks SET user_id = (SELECT id FROM users ORDER BY id LIMIT 1) "
-            "WHERE user_id IS NULL"
+    owner = db.session.execute(text("SELECT id FROM users ORDER BY id LIMIT 1")).fetchone()
+    if owner is not None:
+        db.session.execute(
+            text("UPDATE tasks SET user_id = :uid WHERE user_id IS NULL"),
+            {"uid": owner[0]},
         )
-    )
     db.session.commit()

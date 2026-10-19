@@ -18,13 +18,24 @@ def _database_uri() -> str:
         if url.startswith("postgresql://"):
             url = "postgresql+psycopg://" + url[len("postgresql://") :]
         parts = urlsplit(url)
-        # Neon appends channel_binding=require. The pooler and psycopg reject that option.
+        # The hostname with -pooler is Neon's connection pool. This app creates tables on
+        # startup, which needs the direct database host. Drop that suffix once.
+        hostname = (parts.hostname or "").replace("-pooler", "", 1)
+        netloc = hostname
+        if parts.username:
+            userinfo = parts.username
+            if parts.password:
+                userinfo += f":{parts.password}"
+            netloc = f"{userinfo}@{hostname}"
+        if parts.port:
+            netloc += f":{parts.port}"
+        # Neon appends channel_binding=require. psycopg on Vercel rejects that option.
         query = [
             (key, value)
             for key, value in parse_qsl(parts.query, keep_blank_values=True)
             if key != "channel_binding"
         ]
-        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+        return urlunsplit((parts.scheme, netloc, parts.path, urlencode(query), parts.fragment))
 
     db_path = os.environ.get(
         "SQLITE_PATH",
@@ -45,11 +56,16 @@ class Config:
 
     SQLALCHEMY_DATABASE_URI = _database_uri()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    SQLALCHEMY_ENGINE_OPTIONS = (
-        {"pool_pre_ping": True, "connect_args": {"prepare_threshold": None}}
-        if SQLALCHEMY_DATABASE_URI.startswith("postgresql")
-        else {}
-    )
+    if SQLALCHEMY_DATABASE_URI.startswith("postgresql"):
+        from sqlalchemy.pool import NullPool
+
+        # Serverless workers must not keep a connection pool of their own.
+        SQLALCHEMY_ENGINE_OPTIONS = {
+            "poolclass": NullPool,
+            "connect_args": {"prepare_threshold": None},
+        }
+    else:
+        SQLALCHEMY_ENGINE_OPTIONS = {}
 
     CORS_ORIGINS = [
         "http://127.0.0.1:5173",
