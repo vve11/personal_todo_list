@@ -2,6 +2,7 @@ from typing import Optional
 
 from datetime import datetime
 
+from app import cache
 from app.config import Config
 from app.exceptions import NotFoundError
 from app.models import User
@@ -19,25 +20,35 @@ class NotificationService:
 
     def list_due(self, user: User) -> dict:
         """Preview upcoming reminders (before cron fires)."""
+        cached = cache.get_json(cache.due_key(user.id))
+        if isinstance(cached, dict):
+            return cached
         now = datetime.utcnow()
         items = []
         for task in self.task_repo.list_by_user(user.id):
             milestone = self._preview_milestone(task, now)
             if milestone:
                 items.append(self._preview_payload(task, milestone))
-        return {
+        payload = {
             "notifications_enabled": user.notifications_enabled,
             "milestones": list(Config.REMINDER_MILESTONES),
             "items": items,
         }
+        cache.set_json(cache.due_key(user.id), payload)
+        return payload
 
     def inbox(self, user: User) -> dict:
+        cached = cache.get_json(cache.inbox_key(user.id))
+        if isinstance(cached, dict):
+            return cached
         logs = self.log_repo.list_inbox_for_user(user.id)
         unread = self.log_repo.count_unread_for_user(user.id)
-        return {
+        payload = {
             "unread_count": unread,
             "items": [log.to_dict() for log in logs],
         }
+        cache.set_json(cache.inbox_key(user.id), payload)
+        return payload
 
     def mark_read(self, user: User, log_id: int) -> dict:
         log = self.log_repo.get_for_user(user.id, log_id)

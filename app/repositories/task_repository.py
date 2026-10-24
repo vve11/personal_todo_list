@@ -3,6 +3,7 @@ from typing import Optional
 
 from sqlalchemy import and_, func, or_
 
+from app import cache
 from app.extensions import db
 from app.models import Task
 
@@ -32,15 +33,19 @@ class TaskRepository:
     def add(self, task: Task) -> Task:
         db.session.add(task)
         db.session.commit()
+        cache.invalidate_user(task.user_id)
         return task
 
     def save(self, task: Task) -> Task:
         db.session.commit()
+        cache.invalidate_user(task.user_id)
         return task
 
     def delete(self, task: Task) -> None:
+        user_id = task.user_id
         db.session.delete(task)
         db.session.commit()
+        cache.invalidate_user(user_id)
 
     def renumber_for_user(self, user_id: int) -> None:
         tasks = (
@@ -51,6 +56,7 @@ class TaskRepository:
         for index, task in enumerate(tasks):
             task.sort_order = index
         db.session.commit()
+        cache.invalidate_user(user_id)
 
     def reorder_for_user(self, user_id: int, ordered_ids: list[int]) -> list[Task]:
         for index, task_id in enumerate(ordered_ids):
@@ -58,6 +64,7 @@ class TaskRepository:
                 {"sort_order": index, "updated_at": datetime.utcnow()}
             )
         db.session.commit()
+        cache.invalidate_user(user_id)
         return self.list_by_user(user_id)
 
     def list_reminder_candidates(self, horizon_hours: int = 25) -> list[Task]:

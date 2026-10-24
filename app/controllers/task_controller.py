@@ -11,8 +11,7 @@ task_service = TaskService()
 @login_required
 @handle_service_errors
 def list_tasks(user):
-    tasks = task_service.list_tasks(user)
-    return jsonify([task.to_dict() for task in tasks])
+    return jsonify(task_service.list_task_dicts(user))
 
 
 @task_bp.post("")

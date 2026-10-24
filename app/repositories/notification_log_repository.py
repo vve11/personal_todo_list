@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
+from app import cache
 from app.extensions import db
 from app.models import NotificationLog
 
@@ -15,6 +16,7 @@ class NotificationLogRepository:
     def add(self, log: NotificationLog) -> NotificationLog:
         db.session.add(log)
         db.session.commit()
+        cache.invalidate_user(log.user_id)
         return log
 
     def list_inbox_for_user(self, user_id: int, limit: int = 50) -> list[NotificationLog]:
@@ -35,6 +37,7 @@ class NotificationLogRepository:
         if log.read_at is None:
             log.read_at = datetime.utcnow()
             db.session.commit()
+            cache.invalidate_user(log.user_id)
         return log
 
     def mark_all_read(self, user_id: int) -> int:
@@ -44,4 +47,5 @@ class NotificationLogRepository:
             .update({"read_at": now}, synchronize_session=False)
         )
         db.session.commit()
+        cache.invalidate_user(user_id)
         return updated

@@ -2,6 +2,7 @@ from typing import Optional
 
 from datetime import datetime
 
+from app import cache
 from app.exceptions import NotFoundError, ValidationError
 from app.models import Task, User
 from app.repositories import TaskRepository
@@ -14,6 +15,14 @@ class TaskService:
 
     def list_tasks(self, user: User) -> list[Task]:
         return self.task_repo.list_by_user(user.id)
+
+    def list_task_dicts(self, user: User) -> list[dict]:
+        cached = cache.get_json(cache.tasks_key(user.id))
+        if isinstance(cached, list):
+            return cached
+        payload = [task.to_dict() for task in self.list_tasks(user)]
+        cache.set_json(cache.tasks_key(user.id), payload)
+        return payload
 
     def create_task(self, user: User, data: dict) -> Task:
         title = (data.get("title") or "").strip()

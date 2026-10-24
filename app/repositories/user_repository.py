@@ -1,5 +1,6 @@
 from typing import Optional
 
+from app import cache
 from app.extensions import db
 from app.models import User
 
@@ -20,10 +21,12 @@ class UserRepository:
     def add(self, user: User) -> User:
         db.session.add(user)
         db.session.commit()
+        cache.invalidate_user(user.id)
         return user
 
     def save(self, user: User) -> User:
         db.session.commit()
+        cache.invalidate_user(user.id)
         return user
 
     def list_with_notifications_enabled(self) -> list[User]:
