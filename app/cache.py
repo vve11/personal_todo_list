@@ -10,6 +10,10 @@ _unavailable = False
 DEFAULT_TTL_SECONDS = 60
 
 
+def client():
+    return _redis()
+
+
 def _redis():
     global _client, _unavailable
     if _unavailable:
@@ -33,8 +37,8 @@ def _redis():
         client = redis.Redis.from_url(
             url,
             decode_responses=True,
-            socket_connect_timeout=1,
-            socket_timeout=1,
+            socket_connect_timeout=5,
+            socket_timeout=5,
         )
         client.ping()
     except Exception:

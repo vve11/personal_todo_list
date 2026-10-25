@@ -4,7 +4,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 from app.config import Config
-from app.controllers import auth_bp, notification_bp, static_bp, task_bp, user_bp
+from app.controllers import auth_bp, job_bp, notification_bp, static_bp, task_bp, user_bp
 from app.database.schema import ensure_schema
 from app.extensions import db
 from app.jobs.scheduler import start_reminder_scheduler
@@ -29,6 +29,7 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(user_bp)
     app.register_blueprint(task_bp)
     app.register_blueprint(notification_bp)
+    app.register_blueprint(job_bp)
     app.register_blueprint(static_bp)
 
     schema_error = None

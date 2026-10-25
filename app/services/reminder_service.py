@@ -37,7 +37,7 @@ class ReminderService:
                 skipped += 1
                 continue
 
-            milestone = self._matching_milestone(task, now)
+            milestone = self.ready_milestone(task, now)
             if milestone is None:
                 continue
             if self.log_repo.exists(task.id, milestone):
@@ -52,6 +52,50 @@ class ReminderService:
                 skipped += 1
 
         return {"sent": sent, "skipped": skipped, "failed": failed, "checked_at": now.isoformat() + "Z"}
+
+    def enqueue_due(self) -> int:
+        from app.queue import enqueue_reminder
+
+        now = datetime.utcnow()
+        enqueued = 0
+        for task in self.task_repo.list_reminder_candidates():
+            user = self.user_repo.get_by_id(task.user_id)
+            if user is None or not user.notifications_enabled:
+                continue
+            milestone = self.ready_milestone(task, now)
+            if milestone is None or self.log_repo.exists(task.id, milestone):
+                continue
+            if enqueue_reminder(task.id, user.id, milestone):
+                enqueued += 1
+        return enqueued
+
+    def handle_message(self, message: dict) -> str:
+        if message.get("type") != "send_reminder":
+            return "skipped"
+        user = self.user_repo.get_by_id(message["user_id"])
+        task = self.task_repo.get_for_user(message["user_id"], message["task_id"])
+        milestone = message.get("milestone")
+        if user is None or task is None or not user.notifications_enabled or task.completed:
+            return "skipped"
+        if not milestone or self.log_repo.exists(task.id, milestone):
+            return "skipped"
+        return self._deliver(user, task, milestone, datetime.utcnow())
+
+    def ready_milestone(self, task: Task, now: datetime) -> Optional[str]:
+        if task.due_at is None or task.completed:
+            return None
+        if "overdue" in Config.REMINDER_MILESTONES and now > task.due_at:
+            return "overdue"
+        chosen = None
+        chosen_offset = None
+        for milestone in Config.REMINDER_MILESTONES:
+            offset = MILESTONE_OFFSETS.get(milestone)
+            if offset is None:
+                continue
+            if task.due_at - offset <= now and (chosen_offset is None or offset < chosen_offset):
+                chosen = milestone
+                chosen_offset = offset
+        return chosen
 
     def _matching_milestone(self, task: Task, now: datetime) -> Optional[str]:
         if task.due_at is None or task.completed:

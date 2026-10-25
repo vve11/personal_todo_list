@@ -3,7 +3,7 @@ import threading
 import time
 
 from app.config import Config
-from app.services.reminder_service import ReminderService
+from app.jobs.worker import drain_reminders
 
 _logger = logging.getLogger(__name__)
 _scheduler_started = False
@@ -12,7 +12,7 @@ _scheduler_lock = threading.Lock()
 
 def _poll_once(app) -> None:
     with app.app_context():
-        result = ReminderService().run_scheduled_reminders()
+        result = drain_reminders()
         _logger.info(
             "Reminder poll finished: sent=%s skipped=%s failed=%s",
             result["sent"],
